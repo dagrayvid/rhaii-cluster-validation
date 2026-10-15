@@ -8,7 +8,7 @@ USER root
 # switch from internal mirrors to public vendor repos
 RUN ${APP_ROOT}/lib/tools/public-repos.sh
 
-# Install build dependencies (cuda-nvml-devel for nvml.h header needed by libfabric CUDA HMEM)
+# Install build dependencies
 RUN dnf install -y \
     gcc gcc-c++ make diffutils \
     autoconf automake libtool pkg-config \
@@ -16,11 +16,22 @@ RUN dnf install -y \
     libnl3-devel \
     python3 \
     pciutils-devel \
-    --enablerepo="external-nvidia-cuda-for-rhel-9-$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/sbsa/')-rpms" \
-    cuda-nvml-devel-13-0 \
     && dnf clean all
 
-# --- Step 1: Build and install rdma-core v64.0 to /usr ---
+# nvml.h for libfabric's CUDA HMEM support (src/hmem_cuda.c includes it under
+# HAVE_CUDA). This base image ships cuda-cudart-devel but not cuda-nvml-devel,
+# and the only RPM source for that header is NVIDIA's own repo, whose repo id is
+# not in Conforma's known_rpm_repositories list. So we vendor the header from a
+# pinned submodule, like rdma-core/libfabric/perftest. Compile-time only: with
+# --enable-cuda-dlopen libfabric never links libnvidia-ml, it dlopen()s
+# libnvidia-ml.so.1 at runtime, and the header never reaches the runtime stage.
+# NOTE: use gen/nvml/nvml.h (pristine upstream header), NOT pkg/nvml/nvml.h —
+# the latter rewrites opaque handle typedefs (nvmlDevice_t etc.) into cgo
+# wrapper structs, which would not match libnvidia-ml.so's real ABI.
+COPY tools/go-nvml/gen/nvml/nvml.h /tmp/nvml.h
+RUN cp /tmp/nvml.h /usr/local/cuda/include/nvml.h && rm /tmp/nvml.h
+
+# --- Step 1: Build and install rdma-core from the pinned submodule ---
 # Provides: libibverbs.so, libefa.so (EFA), libmlx5.so (IB/RoCE), librdmacm.so
 # NOTE: Unlike Dockerfile.dev, we do NOT need -DENABLE_RESOLVE_NEIGH=0 here
 # because libnl3-devel is available from RH repos (installed above).
@@ -35,7 +46,7 @@ RUN cd /tmp/rdma-core && \
     ninja -C build install && \
     ldconfig
 
-# --- Step 2: Build and install libfabric v2.6.0amzn1.0 to /usr ---
+# --- Step 2: Build and install libfabric from the pinned submodule ---
 # Provides: libfabric.so.1 with EFA provider + CUDA HMEM support
 # NOTE: --enable-cuda-dlopen is used because this RH CUDA base image has no
 # libcuda.so/libnvidia-ml.so stubs. dlopen loads them at runtime via NVIDIA
@@ -61,7 +72,7 @@ RUN cd /tmp/libfabric/fabtests && \
     make -j$(nproc) && \
     make install DESTDIR=/opt/fabtests
 
-# --- Step 4: Build perftest 26.07.8 from source ---
+# --- Step 4: Build perftest from the pinned submodule ---
 # Provides: ib_write_bw, ibv_rc_pingpong (IB/RoCE bandwidth + reachability)
 COPY tools/perftest/ /tmp/perftest/
 RUN test -f /tmp/perftest/autogen.sh || \
@@ -93,7 +104,7 @@ COPY --from=builder \
     /usr/lib64/libmlx* \
     /usr/lib64/libfabric* \
     /usr/lib64/
-# Provider plugins directory (libefa-rdmav64.so, libmlx5-rdmav64.so, etc.)
+# Provider plugins directory (libefa-rdma*.so, libmlx5-rdma*.so, etc.)
 COPY --from=builder /usr/lib64/libibverbs/ /usr/lib64/libibverbs/
 
 # Copy RDMA & libfabric executables
