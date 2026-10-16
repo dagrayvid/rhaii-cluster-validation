@@ -3,7 +3,7 @@ ARG RUNTIME_IMAGE=registry.access.redhat.com/ubi9/ubi:latest
 
 # ============================================================================
 # Builder Stage: Build rdma-core, libfabric, fabtests, and perftest from source
-# RDMA components are pinned to the versions shipped by AWS EFA installer 1.50.0.
+# All versions pinned to match AWS EFA installer 1.46.0 / llm-d v0.8.1
 # ============================================================================
 FROM ${BUILDER_IMAGE} AS builder
 
@@ -16,7 +16,7 @@ RUN dnf install -y \
     pciutils-devel \
     && dnf clean all
 
-# --- Step 1: Build and install rdma-core from the pinned submodule ---
+# --- Step 1: Build and install rdma-core v60.0 ---
 # Provides: libibverbs.so, libefa.so (EFA), libmlx5.so (IB/RoCE), librdmacm.so
 COPY tools/rdma-core/ /tmp/rdma-core/
 RUN cd /tmp/rdma-core && \
@@ -34,7 +34,7 @@ RUN cd /tmp/rdma-core && \
 # not needed for our RDMA tests. Dockerfile.konflux has libnl3-devel available
 # from RH repos so it omits this flag.
 
-# --- Step 2: Build and install libfabric from the pinned submodule ---
+# --- Step 2: Build and install libfabric v2.3.1amzn4.0 ---
 # Provides: libfabric.so.1 with EFA provider + CUDA HMEM support
 # NOTE: This base image (nvcr.io/nvidia/cuda) ships CUDA stubs, so we can link
 # directly (--with-cuda). Dockerfile.konflux uses --enable-cuda-dlopen instead
@@ -65,7 +65,7 @@ RUN cd /tmp/libfabric/fabtests && \
     make -j$(nproc) && \
     make install DESTDIR=/opt/fabtests
 
-# --- Step 4: Build perftest from the pinned submodule ---
+# --- Step 4: Build perftest from source (existing) ---
 # Provides: ib_write_bw, ibv_rc_pingpong (IB/RoCE bandwidth + reachability)
 COPY tools/perftest/ /tmp/perftest/
 RUN test -f /tmp/perftest/autogen.sh || \
@@ -100,7 +100,7 @@ COPY --from=builder \
     /usr/lib64/libmlx* \
     /usr/lib64/libfabric* \
     /usr/lib64/
-# Provider plugins directory (libefa-rdma*.so, libmlx5-rdma*.so, etc.)
+# Provider plugins directory (libefa-rdmav60.so, libmlx5-rdmav60.so, etc.)
 COPY --from=builder /usr/lib64/libibverbs/ /usr/lib64/libibverbs/
 
 # Copy RDMA & libfabric executables
